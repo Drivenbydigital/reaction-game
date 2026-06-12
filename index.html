@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Reflex · Reaction Time Lab</title>
 <meta name="description" content="A precision reaction-time instrument built with Three.js. Measure your reflexes to the millisecond." />
+<link rel="icon" type="image/png" href="favicon.png" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -183,6 +184,82 @@
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+
+  /* Qualitative rating word shown with the result */
+  .rating {
+    display: none;
+    font-family: var(--font-head);
+    font-weight: 700;
+    font-size: clamp(22px, 6vw, 34px);
+    line-height: 1.05;
+    text-shadow: 0 2px 18px rgba(15, 23, 42, 0.9);
+  }
+
+  /* In-chamber instructions (shown only on idle / after reset) */
+  .intro {
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 11px;
+    width: min(92%, 360px);
+    padding: 16px 18px 15px;
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.74);
+    border: 1px solid var(--border-2);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 18px 44px -22px rgba(0, 0, 0, 0.85);
+    text-align: left;
+  }
+  .stage[data-state="idle"] .intro { display: flex; }
+  .stage[data-state="idle"] .panel { display: none; }
+  .intro .eyebrow { text-align: center; }
+
+  .intro .steps {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .intro .steps li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: clamp(12px, 3vw, 13.5px);
+    color: var(--text);
+    font-weight: 500;
+  }
+  .intro .sn {
+    width: 20px; height: 20px;
+    flex: none;
+    display: grid; place-items: center;
+    border-radius: 6px;
+    background: rgba(148, 163, 184, 0.16);
+    font-size: 11px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .intro .scale {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-top: 11px;
+    border-top: 1px solid var(--border);
+  }
+  .srow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: clamp(11px, 2.8vw, 12.5px);
+  }
+  .srow .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .srow .sl { color: var(--text); font-weight: 600; }
+  .srow .sv {
+    margin-left: auto;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .intro .hint { text-align: center; margin-top: 3px; }
   .eyebrow {
     font-size: clamp(11px, 2.6vw, 13px);
     font-weight: 700;
@@ -476,7 +553,8 @@
          id="stage"
          role="button"
          tabindex="0"
-         aria-label="Reaction chamber. Press to start, then react when it turns green.">
+         data-state="idle"
+         aria-label="Reaction chamber. Press Space or tap to start, then react when it turns green.">
       <canvas id="scene"></canvas>
       <div class="fallback" id="fallback" aria-hidden="true"></div>
       <div class="status"><span class="led" aria-hidden="true"></span><span id="statusText">Standby</span></div>
@@ -485,8 +563,25 @@
         <span class="rnum"><span id="cornerNum">0</span><span class="runit">ms</span></span>
       </div>
       <div class="overlay">
+        <div class="intro">
+          <span class="eyebrow">How to play</span>
+          <ol class="steps">
+            <li><span class="sn">1</span> Press start to arm the chamber</li>
+            <li><span class="sn">2</span> Hold steady — wait for green</li>
+            <li><span class="sn">3</span> React the instant it turns</li>
+          </ol>
+          <div class="scale">
+            <div class="srow"><span class="dot" style="background:#10B981"></span><span class="sl">Amazing</span><span class="sv">under 180 ms</span></div>
+            <div class="srow"><span class="dot" style="background:#3B82F6"></span><span class="sl">Very good</span><span class="sv">180–219</span></div>
+            <div class="srow"><span class="dot" style="background:#60A5FA"></span><span class="sl">Good</span><span class="sv">220–259</span></div>
+            <div class="srow"><span class="dot" style="background:#F59E0B"></span><span class="sl">Average</span><span class="sv">260–329</span></div>
+            <div class="srow"><span class="dot" style="background:#EF4444"></span><span class="sl">Below average</span><span class="sv">330 ms +</span></div>
+          </div>
+          <span class="hint">Press Space or tap the chamber to start</span>
+        </div>
         <div class="panel">
           <span class="eyebrow" id="eyebrow">Standby</span>
+          <div class="rating" id="ratingEl"></div>
           <div class="readout text" id="readout">Press start, then wait for green.</div>
           <span class="hint" id="hint">Tap the chamber or press Space</span>
         </div>
@@ -592,6 +687,7 @@
     const hintEl     = document.getElementById("hint");
     const statusEl   = document.getElementById("statusText");
     const cornerNum  = document.getElementById("cornerNum");
+    const ratingEl   = document.getElementById("ratingEl");
     const statBest   = document.getElementById("statBest");
     const statAvg    = document.getElementById("statAvg");
     const statCount  = document.getElementById("statCount");
@@ -757,6 +853,15 @@
     // =========================================================
     //  Game logic
     // =========================================================
+    // Map a reaction time (ms) to a qualitative band.
+    function rate(rt) {
+      if (rt < 180) return { label: "Amazing",       color: "#10B981" };
+      if (rt < 220) return { label: "Very good",     color: "#3B82F6" };
+      if (rt < 260) return { label: "Good",          color: "#60A5FA" };
+      if (rt < 330) return { label: "Average",       color: "#F59E0B" };
+      return              { label: "Below average", color: "#EF4444" };
+    }
+
     function setState(next) {
       game.state = next;
       const cfg = STATES[next];
@@ -772,6 +877,10 @@
       if (cfg.text !== null) {
         readoutEl.className = "readout text";
         readoutEl.textContent = cfg.text;
+      }
+      if (next !== "result") {
+        ratingEl.textContent = "";
+        ratingEl.style.display = "none";
       }
 
       // 3D target colour. "go" is snapped (handled in triggerGo).
@@ -832,14 +941,20 @@
       // Reaction = now − stimulus onset. Pure measurement, no render coupling.
       const rt = Math.round(performance.now() - game.startTime);
       game.times.push(rt);
+      const r = rate(rt);
 
       setState("result");
       if (three.ok) three.pulse = 0.6;
 
-      // Result lives in the top-right corner of the chamber.
+      // Result number lives in the top-right corner; rating in the centre.
       cornerNum.textContent = rt;
+      ratingEl.textContent = r.label;
+      ratingEl.style.color = r.color;
+      ratingEl.style.display = "block";
+
       stageEl.setAttribute("aria-label",
-        "Result: " + rt + " milliseconds. Tap the chamber to run it again.");
+        "Result: " + rt + " milliseconds, rated " + r.label +
+        ". Tap the chamber to run it again.");
 
       updateStats();
     }
