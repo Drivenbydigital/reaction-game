@@ -1,994 +1,171 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Reflex · Reaction Time Lab</title>
-<meta name="description" content="A precision reaction-time instrument built with Three.js. Measure your reflexes to the millisecond." />
-
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700&display=swap" rel="stylesheet" />
-
-<style>
-  :root {
-    --bg:        #0F172A;
-    --surface:   #1E293B;
-    --text:      #F1F5F9;
-    --muted:     #94A3B8;
-    --ready:     #10B981; /* go / start affordance */
-    --waiting:   #F59E0B; /* armed, holding */
-    --result:    #3B82F6; /* measurement shown */
-    --error:     #EF4444; /* false start */
-
-    --border:    rgba(148, 163, 184, 0.16);
-    --border-2:  rgba(148, 163, 184, 0.28);
-
-    /* The live "instrument" colour. Drives the chamber glow, eyebrow,
-       readout and fallback panel. Updated per game state. */
-    --glow:      #94A3B8;
-
-    --font-data: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --font-head: "Poppins", "Inter", system-ui, sans-serif;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  html, body { height: 100%; }
-
-  body {
-    font-family: var(--font-data);
-    color: var(--text);
-    background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(59,130,246,0.10), transparent 60%),
-      radial-gradient(900px 500px at 85% 110%, rgba(16,185,129,0.08), transparent 55%),
-      var(--bg);
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: clamp(18px, 4vw, 40px) clamp(16px, 4vw, 24px);
-  }
-
-  .wrap {
-    width: 100%;
-    max-width: 720px;
-    margin: auto;
-    display: flex;
-    flex-direction: column;
-    gap: clamp(16px, 3vw, 22px);
-  }
-
-  /* ---------- Header ---------- */
-  header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .brand { display: flex; align-items: baseline; gap: 12px; }
-  .brand h1 {
-    font-family: var(--font-head);
-    font-weight: 700;
-    font-size: clamp(22px, 5vw, 30px);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-  .brand .dot {
-    width: 9px; height: 9px; border-radius: 50%;
-    background: var(--glow);
-    box-shadow: 0 0 14px var(--glow);
-    align-self: center;
-    transition: background .4s ease, box-shadow .4s ease;
-  }
-  .tagline {
-    font-size: 12px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
-  }
-
-  /* ---------- Stage / chamber ---------- */
-  .stage {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 16 / 11;
-    border-radius: 22px;
-    background:
-      radial-gradient(120% 120% at 50% 0%, rgba(255,255,255,0.04), transparent 55%),
-      var(--surface);
-    border: 1px solid var(--border);
-    overflow: hidden;
-    cursor: pointer;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-    box-shadow:
-      inset 0 0 0 1px var(--glow-faint, rgba(148,163,184,0.05)),
-      inset 0 0 60px -30px var(--glow),
-      0 26px 70px -34px var(--glow),
-      0 10px 30px -20px rgba(0,0,0,0.6);
-    transition: box-shadow .45s ease, border-color .45s ease;
-  }
-  .stage:focus-visible {
-    outline: 3px solid var(--glow);
-    outline-offset: 3px;
-  }
-  .stage[data-state="go"] {
-    /* snap, no easing, so the stimulus border fires instantly */
-    transition: none;
-    box-shadow:
-      inset 0 0 0 2px var(--glow),
-      inset 0 0 90px -20px var(--glow),
-      0 0 0 1px var(--glow),
-      0 30px 90px -30px var(--glow);
-  }
-
-  canvas#scene {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    display: block;
-  }
-
-  /* Non-WebGL fallback panel (graceful degradation) */
-  .fallback {
-    position: absolute;
-    inset: 0;
-    display: none;
-    background:
-      radial-gradient(80% 80% at 50% 45%, var(--glow), transparent 70%),
-      var(--surface);
-    opacity: 0.0;
-    transition: opacity .3s ease, background .3s ease;
-  }
-  body[data-webgl="off"] .fallback { display: block; }
-
-  .overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 24px;
-    pointer-events: none;
-    gap: 10px;
-  }
-  .panel {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    max-width: 90%;
-    padding: 18px 26px;
-    border-radius: 18px;
-    background: rgba(15, 23, 42, 0.66);
-    border: 1px solid var(--border-2);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    box-shadow: 0 16px 40px -22px rgba(0, 0, 0, 0.8);
-    transition: background .3s ease, border-color .3s ease, box-shadow .3s ease;
-  }
-  /* During the stimulus, drop the backdrop so REACT reads boldly. */
-  .stage[data-state="go"] .panel {
-    background: transparent;
-    border-color: transparent;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-  .eyebrow {
-    font-size: clamp(11px, 2.6vw, 13px);
-    font-weight: 700;
-    letter-spacing: 0.28em;
-    text-transform: uppercase;
-    color: var(--glow);
-    transition: color .35s ease;
-  }
-  .readout {
-    color: var(--text);
-    line-height: 1.05;
-    max-width: 22ch;
-  }
-  .readout.text {
-    font-size: clamp(18px, 4.4vw, 24px);
-    font-weight: 600;
-    color: var(--text);
-    text-shadow: 0 2px 18px rgba(15, 23, 42, 0.9);
-  }
-  .readout.big {
-    font-family: var(--font-head);
-    font-weight: 700;
-    font-size: clamp(40px, 12vw, 84px);
-    letter-spacing: 0.02em;
-    color: var(--glow);
-    transition: color .25s ease;
-  }
-  .readout .num { font-variant-numeric: tabular-nums; }
-  .readout .unit {
-    font-family: var(--font-data);
-    font-weight: 600;
-    font-size: 0.32em;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-    margin-left: 0.35em;
-    vertical-align: 0.55em;
-    text-transform: uppercase;
-  }
-  .hint {
-    font-size: 14px;
-    color: #CBD5E1;
-    letter-spacing: 0.01em;
-    font-weight: 600;
-    text-shadow: 0 2px 14px rgba(15, 23, 42, 0.9);
-  }
-
-  /* Reaction readout, pinned to the top-right corner of the chamber */
-  .corner-result {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    display: none;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
-    padding: 9px 14px;
-    border-radius: 13px;
-    background: rgba(15, 23, 42, 0.6);
-    border: 1px solid var(--border-2);
-    backdrop-filter: blur(6px);
-    pointer-events: none;
-    text-align: right;
-  }
-  .stage[data-state="result"] .corner-result { display: flex; }
-  .corner-result .rlabel {
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
-  }
-  .corner-result .rnum {
-    font-family: var(--font-head);
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    font-size: clamp(28px, 8vw, 46px);
-    line-height: 1;
-    color: var(--result);
-  }
-  .corner-result .runit {
-    font-family: var(--font-data);
-    font-size: 0.32em;
-    color: var(--muted);
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    margin-left: 4px;
-    text-transform: uppercase;
-  }
-
-  /* tiny live status pill, top-left of stage */
-  .status {
-    position: absolute;
-    top: 14px; left: 14px;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 11px;
-    border-radius: 999px;
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid var(--border);
-    font-size: 10.5px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    font-weight: 600;
-    color: var(--muted);
-    backdrop-filter: blur(6px);
-    pointer-events: none;
-  }
-  .status .led {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--glow);
-    box-shadow: 0 0 10px var(--glow);
-    transition: background .35s ease, box-shadow .35s ease;
-  }
-
-  /* ---------- Stats ---------- */
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-  }
-  .stat {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 14px 16px;
-  }
-  .stat .label {
-    font-size: 10.5px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
-    margin-bottom: 6px;
-  }
-  .stat .value {
-    font-size: clamp(20px, 5.4vw, 26px);
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
-  }
-  .stat .value .u {
-    font-size: 0.5em;
-    color: var(--muted);
-    font-weight: 600;
-    margin-left: 3px;
-  }
-  .stat.best .value { color: var(--ready); }
-
-  /* ---------- Recent attempts strip ---------- */
-  .recent {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 14px 16px 12px;
-  }
-  .recent .head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 10px;
-  }
-  .recent .label {
-    font-size: 10.5px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
-  }
-  .recent .note { font-size: 11px; color: var(--muted); }
-  .bars {
-    display: flex;
-    align-items: flex-end;
-    gap: 6px;
-    height: 46px;
-  }
-  .bars .bar {
-    flex: 1;
-    min-width: 4px;
-    background: linear-gradient(to top, rgba(59,130,246,0.35), var(--result));
-    border-radius: 4px 4px 2px 2px;
-    transition: height .35s ease;
-  }
-  .bars .bar.best {
-    background: linear-gradient(to top, rgba(16,185,129,0.4), var(--ready));
-  }
-  .bars .empty {
-    flex: 1;
-    align-self: center;
-    text-align: center;
-    color: var(--muted);
-    font-size: 12px;
-    height: auto;
-  }
-
-  /* ---------- Controls ---------- */
-  .controls {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  button {
-    font-family: var(--font-data);
-    font-size: 15px;
-    font-weight: 600;
-    border-radius: 13px;
-    border: 1px solid transparent;
-    padding: 13px 22px;
-    cursor: pointer;
-    transition: transform .12s ease, background .2s ease, border-color .2s ease, opacity .2s ease;
-    letter-spacing: 0.01em;
-  }
-  button:active { transform: translateY(1px) scale(0.99); }
-  button:focus-visible { outline: 3px solid var(--result); outline-offset: 2px; }
-
-  .btn-primary {
-    flex: 1;
-    min-width: 160px;
-    background: var(--ready);
-    color: #04210f;
-    box-shadow: 0 12px 30px -14px var(--ready);
-  }
-  .btn-primary:hover { background: #14c089; }
-  .btn-primary[hidden] { display: none; }
-
-  .btn-ghost {
-    background: transparent;
-    color: var(--text);
-    border-color: var(--border-2);
-  }
-  .btn-ghost:hover { border-color: var(--muted); background: rgba(148,163,184,0.06); }
-  .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  /* ---------- How it works ---------- */
-  .how {
-    display: flex;
-    gap: 18px;
-    flex-wrap: wrap;
-    color: var(--muted);
-    font-size: 12.5px;
-  }
-  .how .step { display: flex; align-items: center; gap: 8px; }
-  .how .n {
-    width: 20px; height: 20px;
-    display: grid; place-items: center;
-    border-radius: 6px;
-    background: rgba(148,163,184,0.12);
-    color: var(--text);
-    font-size: 11px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
-
-  footer {
-    color: var(--muted);
-    font-size: 11.5px;
-    text-align: center;
-    letter-spacing: 0.02em;
-  }
-  footer code {
-    font-family: var(--font-data);
-    color: var(--text);
-    background: rgba(148,163,184,0.1);
-    padding: 1px 6px;
-    border-radius: 5px;
-  }
-
-  @media (max-width: 480px) {
-    .stage { aspect-ratio: 5 / 5.4; }
-    .how { gap: 12px; }
-    .btn-primary { min-width: 100%; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    * { transition-duration: 0.001ms !important; }
-  }
-</style>
-</head>
-<body data-webgl="on">
-  <div class="wrap">
-    <header>
-      <div class="brand">
-        <span class="dot" aria-hidden="true"></span>
-        <h1>Reflex</h1>
-      </div>
-      <span class="tagline">Reaction&nbsp;Time&nbsp;Lab</span>
-    </header>
-
-    <!-- Stage: the reaction surface. Click / tap / Space to act. -->
-    <div class="stage"
-         id="stage"
-         role="button"
-         tabindex="0"
-         aria-label="Reaction chamber. Press to start, then react when it turns green.">
-      <canvas id="scene"></canvas>
-      <div class="fallback" id="fallback" aria-hidden="true"></div>
-      <div class="status"><span class="led" aria-hidden="true"></span><span id="statusText">Standby</span></div>
-      <div class="corner-result" aria-hidden="true">
-        <span class="rlabel">Reaction</span>
-        <span class="rnum"><span id="cornerNum">0</span><span class="runit">ms</span></span>
-      </div>
-      <div class="overlay">
-        <div class="panel">
-          <span class="eyebrow" id="eyebrow">Standby</span>
-          <div class="readout text" id="readout">Press start, then wait for green.</div>
-          <span class="hint" id="hint">Tap the chamber or press Space</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="stats">
-      <div class="stat best">
-        <div class="label">Best</div>
-        <div class="value" id="statBest">—</div>
-      </div>
-      <div class="stat">
-        <div class="label">Average</div>
-        <div class="value" id="statAvg">—</div>
-      </div>
-      <div class="stat">
-        <div class="label">Attempts</div>
-        <div class="value" id="statCount">0</div>
-      </div>
-    </div>
-
-    <div class="recent">
-      <div class="head">
-        <span class="label">Recent attempts</span>
-        <span class="note">taller = faster</span>
-      </div>
-      <div class="bars" id="bars"><span class="empty">No attempts yet</span></div>
-    </div>
-
-    <div class="controls">
-      <button class="btn-primary" id="primaryBtn">Start test</button>
-      <button class="btn-ghost" id="resetBtn" disabled>Reset session</button>
-    </div>
-
-    <div class="how" aria-hidden="true">
-      <span class="step"><span class="n">1</span> Arm the chamber</span>
-      <span class="step"><span class="n">2</span> Hold &mdash; wait for green</span>
-      <span class="step"><span class="n">3</span> React instantly</span>
-    </div>
-
-    <footer>
-      Timing via <code>performance.now()</code> &middot; 3D rendered with Three.js, decoupled from the measurement clock.
-    </footer>
-  </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script>
-  "use strict";
-
-  /* =========================================================
-     Reflex — Reaction Time Lab
-     A reaction timer where the millisecond measurement is kept
-     entirely separate from the Three.js render loop:
-       • performance.now() captured at stimulus onset and at input
-       • the render loop only *reflects* state, it never times it
-     ========================================================= */
-
-  (function () {
-    // ---- Palette (kept in sync with CSS) ----
-    const HEX = {
-      idle:       "#94A3B8",
-      waiting:    "#F59E0B",
-      go:         "#10B981",
-      result:     "#3B82F6",
-      falsestart: "#EF4444",
-    };
-
-    // ---- Per-state UI configuration ----
-    const STATES = {
-      idle: {
-        glow: HEX.idle,  status: "Standby",     eyebrow: "Standby",
-        text: "Press start, then wait for green.",
-        hint: "Tap the chamber or press Space",
-      },
-      waiting: {
-        glow: HEX.waiting, status: "Armed",     eyebrow: "Hold",
-        text: "Hold steady — wait for green.",
-        hint: "React the instant it changes",
-      },
-      go: {
-        glow: HEX.go,    status: "Fire",        eyebrow: "React now",
-        text: null, hint: "Tap / Space",
-      },
-      result: {
-        glow: HEX.result, status: "Measured",   eyebrow: "Result",
-        text: "Tap the chamber to run it again.",
-        hint: "or press Space",
-      },
-      falsestart: {
-        glow: HEX.falsestart, status: "False start", eyebrow: "False start",
-        text: "Too soon — you moved before green.",
-        hint: "Tap the chamber to try again",
-      },
-    };
-
-    const REDUCED = window.matchMedia &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    // ---- DOM ----
-    const stageEl   = document.getElementById("stage");
-    const eyebrowEl  = document.getElementById("eyebrow");
-    const readoutEl  = document.getElementById("readout");
-    const hintEl     = document.getElementById("hint");
-    const statusEl   = document.getElementById("statusText");
-    const cornerNum  = document.getElementById("cornerNum");
-    const statBest   = document.getElementById("statBest");
-    const statAvg    = document.getElementById("statAvg");
-    const statCount  = document.getElementById("statCount");
-    const barsEl     = document.getElementById("bars");
-    const primaryBtn = document.getElementById("primaryBtn");
-    const resetBtn   = document.getElementById("resetBtn");
-    const canvas     = document.getElementById("scene");
-
-    // ---- Game state (plain variables — no storage APIs) ----
-    const game = {
-      state: "idle",
-      startTime: 0,      // performance.now() at stimulus onset
-      pendingTimer: null,
-      times: [],
-    };
-
-    // =========================================================
-    //  Three.js scene
-    // =========================================================
-    const three = {
-      ok: false,
-      renderer: null, scene: null, camera: null,
-      mesh: null, edges: null, particles: null,
-      lights: [],
-      raf: null,
-      clock: null,
-      // animation helpers
-      curColor: null, targetColor: null,
-      pulse: 0,        // scale-punch energy (0..1), decays
-      shake: 0,        // false-start shake energy, decays
-      spinBoost: 0,    // extra spin on "go", decays
-    };
-
-    function initThree() {
-      try {
-        if (!window.THREE) throw new Error("Three.js failed to load.");
-
-        const renderer = new THREE.WebGLRenderer({
-          canvas, antialias: true, alpha: true, powerPreference: "high-performance",
-        });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-        const scene = new THREE.Scene();
-
-        const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-        camera.position.set(0, 0, 6);
-
-        // --- Specimen: faceted icosahedron + wireframe edges ---
-        const geo = new THREE.IcosahedronGeometry(1.5, 0);
-        const mat = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(HEX.idle),
-          emissive: new THREE.Color(HEX.idle),
-          emissiveIntensity: 0.32,
-          metalness: 0.35,
-          roughness: 0.35,
-          flatShading: true,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        scene.add(mesh);
-
-        const edgeGeo = new THREE.EdgesGeometry(geo);
-        const edgeMat = new THREE.LineBasicMaterial({
-          color: new THREE.Color(0xF1F5F9), transparent: true, opacity: 0.35,
-        });
-        const edges = new THREE.LineSegments(edgeGeo, edgeMat);
-        mesh.add(edges);
-
-        // --- Lighting ---
-        const ambient = new THREE.AmbientLight(0xffffff, 0.55);
-        const key = new THREE.PointLight(0x93c5fd, 0.9, 50);
-        key.position.set(5, 6, 6);
-        const fill = new THREE.PointLight(0x6ee7b7, 0.6, 50);
-        fill.position.set(-6, -3, 4);
-        const rim = new THREE.DirectionalLight(0xffffff, 0.4);
-        rim.position.set(0, -5, -5);
-        scene.add(ambient, key, fill, rim);
-
-        // --- Ambient particle field (depth) ---
-        const COUNT = REDUCED ? 60 : 220;
-        const pPos = new Float32Array(COUNT * 3);
-        for (let i = 0; i < COUNT; i++) {
-          const r = 5 + Math.random() * 8;
-          const t = Math.random() * Math.PI * 2;
-          const p = Math.acos(2 * Math.random() - 1);
-          pPos[i * 3]     = r * Math.sin(p) * Math.cos(t);
-          pPos[i * 3 + 1] = r * Math.sin(p) * Math.sin(t);
-          pPos[i * 3 + 2] = (r * Math.cos(p)) - 4;
-        }
-        const pGeo = new THREE.BufferGeometry();
-        pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
-        const pMat = new THREE.PointsMaterial({
-          color: new THREE.Color(HEX.idle), size: 0.05,
-          transparent: true, opacity: 0.5, sizeAttenuation: true,
-        });
-        const particles = new THREE.Points(pGeo, pMat);
-        scene.add(particles);
-
-        three.renderer = renderer;
-        three.scene = scene;
-        three.camera = camera;
-        three.mesh = mesh;
-        three.edges = edges;
-        three.particles = particles;
-        three.lights = [ambient, key, fill, rim];
-        three.clock = new THREE.Clock();
-        three.curColor = new THREE.Color(HEX.idle);
-        three.targetColor = new THREE.Color(HEX.idle);
-        three.ok = true;
-
-        resize();
-        animate();
-      } catch (err) {
-        console.error("3D init failed, using fallback panel:", err);
-        three.ok = false;
-        document.body.setAttribute("data-webgl", "off");
-      }
-    }
-
-    function resize() {
-      if (!three.ok) return;
-      const rect = stageEl.getBoundingClientRect();
-      const w = Math.max(1, rect.width);
-      const h = Math.max(1, rect.height);
-      three.renderer.setSize(w, h, false);
-      three.camera.aspect = w / h;
-      three.camera.updateProjectionMatrix();
-    }
-
-    function animate() {
-      three.raf = requestAnimationFrame(animate);
-      const dt = Math.min(three.clock.getDelta(), 0.05);
-      const t = three.clock.elapsedTime;
-      const m = three.mesh;
-
-      // Smoothly approach the target colour (snapped instantly on "go").
-      three.curColor.lerp(three.targetColor, 1 - Math.pow(0.001, dt));
-      m.material.color.copy(three.curColor);
-      m.material.emissive.copy(three.curColor);
-      three.particles.material.color.copy(three.curColor);
-
-      // Decaying energies
-      three.pulse *= Math.pow(0.0009, dt);
-      three.shake *= Math.pow(0.00005, dt);
-      three.spinBoost *= Math.pow(0.02, dt);
-
-      // Rotation (calmer when reduced motion is requested)
-      const baseSpin = REDUCED ? 0.12 : 0.4;
-      m.rotation.y += (baseSpin + three.spinBoost) * dt;
-      m.rotation.x += (baseSpin * 0.5) * dt;
-
-      // Float + scale-punch + shake
-      const bob = REDUCED ? 0 : Math.sin(t * 1.1) * 0.12;
-      const punch = 1 + three.pulse * 0.28;
-      m.scale.setScalar(punch);
-      m.position.y = bob;
-      m.position.x = (Math.random() - 0.5) * three.shake * 0.5;
-
-      if (!REDUCED) three.particles.rotation.y += 0.02 * dt;
-
-      three.renderer.render(three.scene, three.camera);
-    }
-
-    // =========================================================
-    //  Game logic
-    // =========================================================
-    function setState(next) {
-      game.state = next;
-      const cfg = STATES[next];
-
-      // Drive all CSS chrome from one custom property.
-      document.documentElement.style.setProperty("--glow", cfg.glow);
-      stageEl.setAttribute("data-state", next);
-      statusEl.textContent = cfg.status;
-      eyebrowEl.textContent = cfg.eyebrow;
-      stageEl.setAttribute("aria-label", cfg.eyebrow + ". " + (cfg.text || cfg.hint));
-
-      hintEl.textContent = cfg.hint;
-      if (cfg.text !== null) {
-        readoutEl.className = "readout text";
-        readoutEl.textContent = cfg.text;
-      }
-
-      // 3D target colour. "go" is snapped (handled in triggerGo).
-      if (three.ok && next !== "go") {
-        three.targetColor.set(cfg.glow);
-      }
-      // Fallback panel opacity nudge so it visibly reacts too.
-      if (!three.ok) document.getElementById("fallback").style.opacity = (next === "go") ? "0.9" : "0.5";
-
-      // Buttons
-      if (next === "idle") {
-        primaryBtn.hidden = false; primaryBtn.textContent = "Start test";
-      } else if (next === "result" || next === "falsestart") {
-        primaryBtn.hidden = false; primaryBtn.textContent = "Run again";
-      } else {
-        primaryBtn.hidden = true; // waiting / go → the chamber is the control
-      }
-      resetBtn.disabled = game.times.length === 0;
-    }
-
-    function clearPending() {
-      if (game.pendingTimer !== null) {
-        clearTimeout(game.pendingTimer);
-        game.pendingTimer = null;
-      }
-    }
-
-    // Arm the chamber: random 1–5s hold, then fire.
-    function arm() {
-      clearPending();
-      setState("waiting");
-      stageEl.focus({ preventScroll: true });
-      const delay = 1000 + Math.random() * 4000;
-      game.pendingTimer = setTimeout(triggerGo, delay);
-    }
-
-    function triggerGo() {
-      game.pendingTimer = null;
-      // Capture the measurement clock at the exact onset of the stimulus.
-      game.startTime = performance.now();
-      setState("go");
-
-      // Instant, un-eased visual stimulus.
-      if (three.ok) {
-        three.targetColor.set(HEX.go);
-        three.curColor.set(HEX.go);
-        three.mesh.material.color.set(HEX.go);
-        three.mesh.material.emissive.set(HEX.go);
-        three.pulse = 1;
-        three.spinBoost = 6;
-      }
-
-      readoutEl.className = "readout big";
-      readoutEl.textContent = "REACT";
-    }
-
-    function react() {
-      // Reaction = now − stimulus onset. Pure measurement, no render coupling.
-      const rt = Math.round(performance.now() - game.startTime);
-      game.times.push(rt);
-
-      setState("result");
-      if (three.ok) three.pulse = 0.6;
-
-      // Result lives in the top-right corner of the chamber.
-      cornerNum.textContent = rt;
-      stageEl.setAttribute("aria-label",
-        "Result: " + rt + " milliseconds. Tap the chamber to run it again.");
-
-      updateStats();
-    }
-
-    function falseStart() {
-      clearPending();
-      setState("falsestart");
-      if (three.ok) {
-        three.targetColor.set(HEX.falsestart);
-        three.shake = 1;
-      }
-    }
-
-    // The single interaction handler for the chamber.
-    function chamberInput() {
-      switch (game.state) {
-        case "idle":
-        case "result":
-        case "falsestart":
-          arm();
-          break;
-        case "waiting":
-          falseStart();      // moved before the stimulus
-          break;
-        case "go":
-          react();
-          break;
-      }
-    }
-
-    function updateStats() {
-      const n = game.times.length;
-      statCount.textContent = n;
-      if (n === 0) {
-        statBest.textContent = "—";
-        statAvg.textContent = "—";
-        resetBtn.disabled = true;
-        renderBars();
-        return;
-      }
-      const best = Math.min.apply(null, game.times);
-      const avg = Math.round(game.times.reduce((a, b) => a + b, 0) / n);
-      statBest.innerHTML = best + '<span class="u">ms</span>';
-      statAvg.innerHTML = avg + '<span class="u">ms</span>';
-      resetBtn.disabled = false;
-      renderBars();
-    }
-
-    // Recent-attempts strip: taller bar = faster reaction.
-    function renderBars() {
-      const recent = game.times.slice(-14);
-      if (recent.length === 0) {
-        barsEl.innerHTML = '<span class="empty">No attempts yet</span>';
-        return;
-      }
-      const best = Math.min.apply(null, game.times);
-      // Map times to height: clamp to a sensible 120–600ms window.
-      const LO = 120, HI = 600;
-      barsEl.innerHTML = "";
-      recent.forEach((rt) => {
-        const clamped = Math.max(LO, Math.min(HI, rt));
-        const frac = 1 - (clamped - LO) / (HI - LO); // faster → taller
-        const bar = document.createElement("div");
-        bar.className = "bar" + (rt === best ? " best" : "");
-        bar.style.height = (18 + frac * 82) + "%";
-        bar.title = rt + " ms";
-        barsEl.appendChild(bar);
-      });
-    }
-
-    function resetSession() {
-      clearPending();
-      game.times = [];
-      updateStats();
-      setState("idle");
-    }
-
-    // =========================================================
-    //  Wiring
-    // =========================================================
-    // Pointer on the chamber.
-    stageEl.addEventListener("pointerdown", function (e) {
-      e.preventDefault();
-      chamberInput();
-    });
-
-    // Keyboard on the focused chamber (Enter / Space).
-    stageEl.addEventListener("keydown", function (e) {
-      if (e.code === "Space" || e.code === "Enter") {
-        e.preventDefault();
-        chamberInput();
-      }
-    });
-
-    // Global Space to react without focusing the chamber —
-    // but never hijack Space when a button has focus.
-    window.addEventListener("keydown", function (e) {
-      if (e.code !== "Space" || e.repeat) return;
-      const a = document.activeElement;
-      if (a === stageEl) return;                 // handled above
-      if (a && a.tagName === "BUTTON") return;   // let the button act
-      e.preventDefault();
-      chamberInput();
-    });
-
-    primaryBtn.addEventListener("click", function () {
-      // Start / Run again → arm. (Valid only when shown.)
-      if (game.state === "idle" || game.state === "result" || game.state === "falsestart") {
-        arm();
-      }
-    });
-
-    resetBtn.addEventListener("click", resetSession);
-
-    // Throttled resize via rAF.
-    let resizeQueued = false;
-    window.addEventListener("resize", function () {
-      if (resizeQueued) return;
-      resizeQueued = true;
-      requestAnimationFrame(function () { resizeQueued = false; resize(); });
-    });
-
-    // Pause a pending round if the tab is hidden, so a stale stimulus
-    // can't fire to an absent user and corrupt a measurement.
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden && game.state === "waiting") {
-        clearPending();
-        setState("idle");
-      }
-    });
-
-    // Memory management: tear down GPU resources on unload.
-    function dispose() {
-      clearPending();
-      if (three.raf) cancelAnimationFrame(three.raf);
-      if (!three.ok) return;
-      [three.mesh, three.edges, three.particles].forEach((o) => {
-        if (o && o.geometry) o.geometry.dispose();
-        if (o && o.material) o.material.dispose();
-      });
-      if (three.renderer) three.renderer.dispose();
-    }
-    window.addEventListener("pagehide", dispose);
-
-    // ---- Boot ----
-    initThree();
-    setState("idle");
-    updateStats();
-  })();
-  </script>
-</body>
-</html>
+# Reflex — Reaction Time Lab
+
+A precision reaction-time game built as a single static HTML file, with a live **Three.js** 3D scene as the visual stimulus. Click *start*, wait for the chamber to flash green, and react as fast as you can — your time is measured to the millisecond, rated against human benchmarks, and tracked across the session.
+
+Built as a portfolio piece to demonstrate vanilla JavaScript, careful timing, 3D graphics programming, and UI/UX polish — with no framework and no build step.
+
+> **Live demo:** _add your deployed URL here_
+> **Screenshot:** _add a screenshot or GIF here (`docs/preview.gif`)_
+
+---
+
+## Highlights
+
+- **Honest millisecond timing.** The measurement clock is fully decoupled from the render loop, so frame rate and GPU load can't skew the result (see [How timing works](#how-timing-works)).
+- **Three.js stimulus chamber.** A faceted icosahedron floats in a lit chamber with an ambient particle field, snapping color and punching scale the instant the stimulus fires.
+- **Performance ratings.** Every attempt is scored against reaction-time bands, from *Amazing* to *Below average*.
+- **Session statistics.** Best, average, attempt count, and a recent-attempts strip (taller = faster).
+- **False-start detection.** Reacting before the green flash is caught and flagged.
+- **Graceful degradation.** If WebGL is unavailable, the game falls back to a color-driven panel and still plays.
+- **Accessible & responsive.** Keyboard support, ARIA labeling, reduced-motion support, and a mobile-first layout.
+- **Zero dependencies to install.** One HTML file; Three.js loads from a CDN.
+
+---
+
+## Getting started
+
+This is a static site — no build, no package manager.
+
+**Quickest:** open `reflex-reaction-lab.html` directly in a modern browser.
+
+**Recommended (so relative paths like the favicon resolve):** serve the folder over a local HTTP server.
+
+```bash
+# Python 3
+python -m http.server 8000
+
+# or Node
+npx serve .
+```
+
+Then visit `http://localhost:8000/reflex-reaction-lab.html`.
+
+> Three.js is loaded from a CDN, so an internet connection is required on first load.
+
+---
+
+## How to play
+
+1. Press **Start** (or the **Spacebar**, or tap the chamber) to arm it.
+2. **Hold steady** — after a random 1–5 second delay, the chamber turns green.
+3. **React** the instant it does, by tapping the chamber or pressing Space.
+
+Reacting before the green flash is a **false start** and the round resets. Your reaction time, rating, and updated session stats appear after each successful attempt.
+
+### Scoring
+
+| Rating         | Reaction time     |
+| -------------- | ----------------- |
+| Amazing        | under 180 ms      |
+| Very good      | 180 – 219 ms      |
+| Good           | 220 – 259 ms      |
+| Average        | 260 – 329 ms      |
+| Below average  | 330 ms and above  |
+
+Bands are calibrated around the typical human visual reaction time of roughly 250 ms. They're defined in a single `rate()` function and are easy to retune.
+
+---
+
+## How timing works
+
+The core engineering goal was an accurate measurement that holds up *while* a 3D scene renders continuously. The approach:
+
+- All timing uses `performance.now()`, a high-resolution monotonic clock.
+- The stimulus onset time is captured the moment the game transitions to the *go* state.
+- The reaction time is simply `performance.now()` at the user's input minus that onset time.
+
+The `requestAnimationFrame` render loop only *reflects* game state — it animates the object and lerps colors — but it never participates in the measurement. As a result, render frame rate has no effect on the recorded number. The one unavoidable constant is the sub-frame latency (≤ ~16 ms) between recording the onset and the pixels actually being painted, which is inherent to any browser-based reaction test.
+
+No browser storage APIs are used; all session state (times, stats, current game state) lives in plain in-memory JavaScript variables and resets on reload.
+
+---
+
+## Tech stack
+
+- **HTML5 / CSS3** — single-file layout, CSS custom properties for theming, `backdrop-filter` panels.
+- **Vanilla JavaScript** — a small explicit state machine (`idle → waiting → go → result`, plus a `falsestart` branch), DOM and event handling, no framework.
+- **Three.js (r128)** — `WebGLRenderer`, perspective camera, ambient + point + directional lights, `MeshStandardMaterial` with flat shading, wireframe edges, and a buffer-geometry particle field.
+- **Google Fonts** — Poppins for headings, Inter (with tabular figures) for data and UI.
+
+---
+
+## Project structure
+
+```
+.
+├── reflex-reaction-lab.html   # the entire app: markup, styles, and logic
+├── favicon.png                # site icon (referenced from the project root)
+└── README.md
+```
+
+Everything — structure, styling, 3D scene, and game logic — lives in the single HTML file for easy hosting and review.
+
+---
+
+## Design system
+
+| Token            | Hex       | Use                          |
+| ---------------- | --------- | ---------------------------- |
+| Background       | `#0F172A` | Page background              |
+| Surface          | `#1E293B` | Cards and chamber            |
+| Primary text     | `#F1F5F9` | Headings and values          |
+| Secondary text   | `#94A3B8` | Labels and hints             |
+| Ready / go       | `#10B981` | Start affordance, GO state   |
+| Waiting          | `#F59E0B` | Armed / holding state        |
+| Result           | `#3B82F6` | Measurement display          |
+| Error            | `#EF4444` | False start                  |
+
+The active state color drives the 3D object, the chamber glow, and the status indicator together, so the instrument visibly "arms," "holds," and "fires."
+
+---
+
+## Accessibility
+
+- The chamber is a focusable control (`role="button"`, keyboard-operable via Enter/Space).
+- ARIA labels announce the current state and the result, including the rating.
+- Visible `:focus-visible` outlines and high-contrast text on backdrop panels.
+- `prefers-reduced-motion` is respected: decorative motion (bobbing, particle drift, spin) is toned down while the essential state cues remain.
+
+---
+
+## Browser support
+
+Works in current versions of Chrome, Firefox, Safari, and Edge. A WebGL-capable browser gets the full 3D experience; if WebGL initialization fails, the app detects it and switches to a color-driven fallback panel so the game remains fully playable.
+
+---
+
+## Performance & memory
+
+- A single 3D mesh is reused across all states — no per-round allocation.
+- Pixel ratio is capped to keep rendering light on high-DPI displays.
+- Resize handling is throttled with `requestAnimationFrame`.
+- GPU resources (geometries, materials, renderer) are disposed on `pagehide`, and the animation loop is canceled on teardown.
+
+---
+
+## Customization
+
+- **Rating bands** — edit the thresholds in the `rate()` function.
+- **Stimulus delay** — change the `1000 + Math.random() * 4000` range in `arm()`.
+- **Colors** — update the CSS custom properties in `:root` and the matching `HEX` map in the script.
+- **3D object** — swap the `IcosahedronGeometry` for any other Three.js geometry.
+
+---
+
+## Possible enhancements
+
+- Median and a small distribution view (reaction times are right-skewed, so median is often more representative than the mean).
+- Persisting best scores (would require adding a storage layer).
+- Audio cue option and a configurable number of rounds per session.
+
+---
+
+## License
+
+Released under the MIT License — feel free to adapt and reuse. _Add a `LICENSE` file if you publish this._
+
+---
+
+## Credits
+
+3D rendering powered by [Three.js](https://threejs.org/). Typography by [Inter](https://rsms.me/inter/) and [Poppins](https://fonts.google.com/specimen/Poppins).
